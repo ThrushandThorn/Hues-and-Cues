@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multiplayer Hues and Cues</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Login Screen -->
+    <div id="login-screen" class="screen active">
+      <div class="container">
+        <h1>🎨 Hues and Cues</h1>
+        <p>A multiplayer color guessing game</p>
+        
+        <div class="form-group">
+          <input 
+            id="player-name" 
+            type="text" 
+            placeholder="Enter your name" 
+            maxlength="20"
+            class="input-field"
+          >
+        </div>
+
+        <div class="form-group">
+          <input 
+            id="room-id" 
+            type="text" 
+            placeholder="Room code (e.g., 'game1')" 
+            maxlength="20"
+            class="input-field"
+          >
+        </div>
+
+        <div class="button-group">
+          <button id="create-btn" class="btn btn-primary">Create Room</button>
+          <button id="join-btn" class="btn btn-secondary">Join Room</button>
+        </div>
+
+        <div id="error-message" class="error"></div>
+      </div>
+    </div>
+
+    <!-- Lobby Screen -->
+    <div id="lobby-screen" class="screen">
+      <div class="container">
+        <h1>Waiting Room</h1>
+        <p id="room-code"></p>
+
+        <div class="players-section">
+          <h3>Players in Room:</h3>
+          <ul id="players-list" class="players-list"></ul>
+        </div>
+
+        <div id="lobby-controls">
+          <button id="start-btn" class="btn btn-primary">Start Game</button>
+          <button id="leave-btn" class="btn btn-secondary">Leave</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="game-screen" class="screen">
+      <div class="container">
+        <div class="game-header">
+          <h1>Round <span id="round-number">1</span>/5</h1>
+          <div class="scores-display" id="scores-display"></div>
+        </div>
+
+        <!-- Role display -->
+        <div id="role-display" class="role-display"></div>
+
+        <!-- Colors to guess -->
+        <div id="colors-container" class="colors-grid"></div>
+
+        <!-- Clue input (for clue giver) -->
+        <div id="clue-input-section" class="hidden">
+          <input 
+            id="clue-input" 
+            type="text" 
+            placeholder="Enter a one-word clue"
+            maxlength="20"
+            class="input-field"
+          >
+          <button id="submit-clue-btn" class="btn btn-primary">Submit Clue</button>
+        </div>
+
+        <!-- Guesses display -->
+        <div id="guesses-display" class="guesses-display"></div>
+
+        <!-- Next round button -->
+        <div id="next-round-section" class="hidden">
+          <button id="next-round-btn" class="btn btn-primary">Next Round</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="game-over-screen" class="screen">
+      <div class="container">
+        <h1>🎉 Game Over!</h1>
+        
+        <div class="final-scores" id="final-scores"></div>
+
+        <div class="button-group">
+          <button id="play-again-btn" class="btn btn-primary">Play Again</button>
+          <button id="exit-btn" class="btn btn-secondary">Exit to Lobby</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
