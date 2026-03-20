@@ -4,6 +4,7 @@ let currentPlayer = {};
 let currentRoom = '';
 let gameState = null;
 let isClueGiver = false;
+let selectedCorrectColor = null; // Track selected color for clue giver
 
 // DOM Elements
 const screens = {
@@ -82,14 +83,23 @@ buttons.leave.addEventListener('click', () => {
   window.location.reload();
 });
 
-// Game handlers
+// Game handlers - NEW WORKFLOW
 buttons.submitClue.addEventListener('click', () => {
   const clue = document.getElementById('clue-input').value.trim();
-  if (clue) {
-    socket.emit('provide_clue', clue);
-    document.getElementById('clue-input').value = '';
-    document.getElementById('clue-input-section').classList.add('hidden');
+  
+  if (!clue) {
+    showError('Please enter a clue');
+    return;
   }
+
+  if (!selectedCorrectColor && selectedCorrectColor !== 0) {
+    showError('Pick a color first!');
+    return;
+  }
+
+  socket.emit('provide_clue', clue);
+  document.getElementById('clue-input').value = '';
+  document.getElementById('clue-input-section').classList.add('hidden');
 });
 
 buttons.nextRound.addEventListener('click', () => {
@@ -122,7 +132,18 @@ socket.on('player_joined', (data) => {
 socket.on('round_started', (data) => {
   gameState = data;
   isClueGiver = data.clueGiver === socket.id;
+  selectedCorrectColor = null;
   renderGameScreen(data);
+});
+
+socket.on('correct_color_picked', (data) => {
+  const statusEl = document.getElementById('status-message');
+  statusEl.textContent = `✓ ${data.message}`;
+  statusEl.classList.remove('hidden');
+  
+  // Show clue input section
+  document.getElementById('pick-color-prompt').classList.add('hidden');
+  document.getElementById('clue-input-section').classList.remove('hidden');
 });
 
 socket.on('clue_provided', (data) => {
@@ -159,7 +180,6 @@ function updateLobbyScreen(players, scores) {
 
   document.getElementById('room-code').textContent = `Room: ${currentRoom}`;
 
-  // Enable start button only if current player is first
   const canStart = players.length > 1;
   buttons.start.disabled = !canStart;
 }
@@ -178,16 +198,22 @@ function renderGameScreen(data) {
 
   // Display role
   const roleDisplay = document.getElementById('role-display');
+  const clueGiverSection = document.getElementById('clue-giver-section');
+  const statusMessage = document.getElementById('status-message');
+
   if (isClueGiver) {
-    roleDisplay.textContent = '🎭 You are the CLUE GIVER - Give a one-word clue!';
-    showClueInput();
+    roleDisplay.textContent = '🎭 You are the CLUE GIVER';
+    clueGiverSection.classList.remove('hidden');
+    document.getElementById('pick-color-prompt').classList.remove('hidden');
+    document.getElementById('clue-input-section').classList.add('hidden');
+    statusMessage.classList.add('hidden');
   } else {
     const clueGiverName = findPlayerName(data.clueGiver);
     roleDisplay.textContent = `👀 ${clueGiverName} is giving the clue...`;
-    hideClueInput();
+    clueGiverSection.classList.add('hidden');
   }
 
-  // Render color grid
+  // Render color grid (120 colors)
   renderColors(data.colors);
 
   showScreen('game');
@@ -201,29 +227,39 @@ function renderColors(colors) {
         class="color-option" 
         style="background-color: ${color}"
         data-index="${index}"
-        onclick="handleColorGuess(${index})"
+        onclick="handleColorClick(${index})"
       ></div>
     `)
     .join('');
 }
 
-function handleColorGuess(index) {
+function handleColorClick(index) {
   if (isClueGiver) {
-    showError('You cannot guess - you are the clue giver!');
-    return;
+    // Clue giver: picking the correct color
+    // Clear previous selection
+    document.querySelectorAll('.color-option').forEach(el => el.classList.remove('selected'));
+    
+    // Mark as selected
+    document.querySelectorAll('.color-option')[index].classList.add('selected');
+    
+    // Store selection and send to server
+    selectedCorrectColor = index;
+    socket.emit('pick_correct_color', index);
+  } else {
+    // Other players: making a guess
+    socket.emit('make_guess', index);
+    
+    // Visual feedback
+    document.querySelectorAll('.color-option')[index].classList.add('selected');
   }
-
-  const colorOptions = document.querySelectorAll('.color-option');
-  colorOptions.forEach(el => el.classList.remove('selected'));
-  colorOptions[index].classList.add('selected');
-
-  socket.emit('make_guess', index);
 }
 
 function updateGameStatus(clue) {
   const roleDisplay = document.getElementById('role-display');
   roleDisplay.textContent = `💡 Clue: "${clue}"`;
-  hideClueInput();
+  
+  const clueGiverSection = document.getElementById('clue-giver-section');
+  clueGiverSection.classList.add('hidden');
 }
 
 function updateGuesses(guess, scores) {
@@ -240,7 +276,7 @@ function updateGuesses(guess, scores) {
   `;
 
   if (guessesDisplay.innerHTML.includes(guess.playerName)) {
-    return; // Already displayed
+    return;
   }
 
   guessesDisplay.innerHTML += guessElement;
@@ -286,23 +322,14 @@ function renderGameOverScreen(scores, winner) {
 
 // Helper functions
 function findPlayerName(id) {
-  // This would ideally be stored, but we'll show ID for now
   if (id === socket.id) return currentPlayer.name;
   return `Player ${id.slice(0, 4)}`;
-}
-
-function showClueInput() {
-  document.getElementById('clue-input-section').classList.remove('hidden');
-}
-
-function hideClueInput() {
-  document.getElementById('clue-input-section').classList.add('hidden');
 }
 
 // Keyboard shortcuts
 document.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
-    if (document.getElementById('clue-input-section').classList.contains('hidden') === false) {
+    if (!document.getElementById('clue-input-section').classList.contains('hidden')) {
       buttons.submitClue.click();
     }
   }

@@ -72,23 +72,35 @@
         <!-- Role display -->
         <div id="role-display" class="role-display"></div>
 
-        <!-- Colors to guess -->
+        <!-- Status message for clue giver -->
+        <div id="status-message" class="status-message hidden"></div>
+
+        <!-- Colors to guess/pick -->
         <div id="colors-container" class="colors-grid"></div>
 
-        <!-- Clue input (for clue giver) -->
-        <div id="clue-input-section" class="hidden">
-          <input 
-            id="clue-input" 
-            type="text" 
-            placeholder="Enter a one-word clue"
-            maxlength="20"
-            class="input-field"
-          >
-          <button id="submit-clue-btn" class="btn btn-primary">Submit Clue</button>
+        <!-- Clue giver workflow: Pick color first, then give clue -->
+        <div id="clue-giver-section" class="hidden">
+          <div id="pick-color-prompt" class="workflow-step">
+            <p>👆 Click a color above to pick the correct answer first!</p>
+          </div>
+
+          <div id="clue-input-section" class="workflow-step hidden">
+            <p>Now give a one-word clue for the color above:</p>
+            <div style="display: flex; gap: 10px;">
+              <input 
+                id="clue-input" 
+                type="text" 
+                placeholder="One word only!"
+                maxlength="30"
+                class="input-field"
+              >
+              <button id="submit-clue-btn" class="btn btn-primary">Submit</button>
+            </div>
+          </div>
         </div>
 
         <!-- Guesses display -->
-        <div id="guesses-display" class="guesses-display"></div>
+        <div id="guesses-display" class="guesses-display hidden"></div>
 
         <!-- Next round button -->
         <div id="next-round-section" class="hidden">

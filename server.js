@@ -15,20 +15,26 @@ app.use(express.static('public'));
 const PORT = process.env.PORT || 3000;
 
 // Game state management
-const rooms = new Map(); // { roomId: { players: [], gameState, round, scores } }
-const playerRooms = new Map(); // { socketId: roomId }
+const rooms = new Map();
+const playerRooms = new Map();
 
-// Color palette for the game
-const COLORS = [
-  '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
-  '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B88B', '#ABEBC6',
-  '#F1948A', '#85C1E2', '#F9E79F', '#D7BDE2', '#A9DFBF',
-  '#FADBD8', '#FCF3CF', '#D5F4E6', '#EBDEF0', '#FAD7A0'
-];
-
+// Generate 120 colors with many similar shades for difficulty
 function generateColorSet() {
-  const shuffled = [...COLORS].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, 8);
+  const colors = [];
+  const baseHues = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240, 255, 270, 285, 300, 315, 330, 345];
+  
+  // For each hue, create multiple saturation/lightness variations
+  baseHues.forEach(hue => {
+    // Create 5 variations per hue: different saturations and lightness
+    for (let sat = 30; sat <= 100; sat += 17.5) {
+      for (let light = 30; light <= 70; light += 10) {
+        colors.push(`hsl(${hue}, ${sat}%, ${light}%)`);
+      }
+    }
+  });
+
+  // Shuffle and return 120 colors
+  return colors.sort(() => Math.random() - 0.5).slice(0, 120);
 }
 
 function createRoom(roomId) {
@@ -39,7 +45,9 @@ function createRoom(roomId) {
     round: 1,
     scores: {},
     currentPlayer: null,
+    correctColorIndex: null, // The correct answer
     clue: '',
+    clueGiven: false,
     guessing: false,
     guesses: {},
     started: false
@@ -49,7 +57,6 @@ function createRoom(roomId) {
 io.on('connection', (socket) => {
   console.log(`New player connected: ${socket.id}`);
 
-  // Player joins or creates a room
   socket.on('join_room', (roomId, playerName) => {
     roomId = roomId.toLowerCase().trim();
     
@@ -70,7 +77,6 @@ io.on('connection', (socket) => {
     room.players.push({ id: socket.id, name: playerName });
     room.scores[socket.id] = 0;
 
-    // Notify all players in room
     io.to(roomId).emit('player_joined', {
       players: room.players.map(p => ({ id: p.id, name: p.name })),
       scores: room.scores
@@ -79,7 +85,6 @@ io.on('connection', (socket) => {
     console.log(`${playerName} joined room ${roomId}`);
   });
 
-  // Start the game
   socket.on('start_game', () => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
@@ -95,21 +100,53 @@ io.on('connection', (socket) => {
     startRound(roomId);
   });
 
-  // Provide a clue
+  // Clue giver picks the correct color FIRST
+  socket.on('pick_correct_color', (colorIndex) => {
+    const roomId = playerRooms.get(socket.id);
+    if (!roomId) return;
+
+    const room = rooms.get(roomId);
+    if (room.currentPlayer !== socket.id) return;
+    if (room.clueGiven) return; // Already gave clue
+
+    room.correctColorIndex = colorIndex;
+
+    io.to(roomId).emit('correct_color_picked', {
+      playerName: room.players.find(p => p.id === socket.id).name,
+      message: 'Correct color selected! Now give your one-word clue.'
+    });
+  });
+
+  // Provide a clue (must be one word!)
   socket.on('provide_clue', (clue) => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
 
     const room = rooms.get(roomId);
     if (room.currentPlayer !== socket.id) return;
+    if (room.correctColorIndex === null) {
+      socket.emit('error', 'Pick the correct color first!');
+      return;
+    }
 
-    room.clue = clue.trim();
+    // Validate one word
+    const trimmedClue = clue.trim();
+    const wordCount = trimmedClue.split(/\s+/).length;
+
+    if (wordCount !== 1) {
+      socket.emit('error', `Clue must be ONE word! You gave ${wordCount} words.`);
+      return;
+    }
+
+    room.clue = trimmedClue;
+    room.clueGiven = true;
     room.guessing = true;
     room.guesses = {};
 
     io.to(roomId).emit('clue_provided', {
-      clue: clue,
-      guesser: room.currentPlayer
+      clue: trimmedClue,
+      guesser: room.currentPlayer,
+      colorCount: room.colors.length
     });
   });
 
@@ -122,20 +159,16 @@ io.on('connection', (socket) => {
     if (!room.guessing) return;
     if (socket.id === room.currentPlayer) return; // Clue giver can't guess
 
-    const targetColor = room.colors[colorIndex];
-    const isCorrect = room.colors.some((color, idx) => 
-      idx === colorIndex && color === room.colors[colorIndex]
-    );
+    // Check if guess is correct
+    const isCorrect = colorIndex === room.correctColorIndex;
 
-    // Simple scoring: correct guess = 1 point
     if (isCorrect) {
       room.scores[socket.id]++;
     }
 
     room.guesses[socket.id] = {
       playerName: room.players.find(p => p.id === socket.id).name,
-      correct: isCorrect,
-      color: targetColor
+      correct: isCorrect
     };
 
     io.to(roomId).emit('guess_made', {
@@ -169,7 +202,6 @@ io.on('connection', (socket) => {
     startRound(roomId);
   });
 
-  // Handle disconnect
   socket.on('disconnect', () => {
     const roomId = playerRooms.get(socket.id);
     if (roomId) {
@@ -195,6 +227,8 @@ function startRound(roomId) {
   const room = rooms.get(roomId);
   room.guessing = false;
   room.clue = '';
+  room.clueGiven = false;
+  room.correctColorIndex = null;
   room.guesses = {};
 
   // Rotate current player
