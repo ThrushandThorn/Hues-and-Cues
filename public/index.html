@@ -54,10 +54,14 @@
           <ul id="players-list" class="players-list"></ul>
         </div>
 
+        <div id="host-badge" class="host-badge hidden">👑 You are the host</div>
+
         <div id="lobby-controls">
           <button id="start-btn" class="btn btn-primary">Start Game</button>
           <button id="leave-btn" class="btn btn-secondary">Leave</button>
         </div>
+
+        <div id="start-error" class="error"></div>
       </div>
     </div>
 
@@ -72,7 +76,7 @@
         <!-- Role display -->
         <div id="role-display" class="role-display"></div>
 
-        <!-- Status message for clue giver -->
+        <!-- Status message -->
         <div id="status-message" class="status-message hidden"></div>
 
         <!-- Colors to guess/pick -->
@@ -85,16 +89,30 @@
           </div>
 
           <div id="clue-input-section" class="workflow-step hidden">
-            <p>Now give a one-word clue for the color above:</p>
+            <p id="clue-instructions">Give a one-word clue for the color above:</p>
             <div style="display: flex; gap: 10px;">
               <input 
                 id="clue-input" 
                 type="text" 
-                placeholder="One word only!"
+                placeholder="One word"
                 maxlength="30"
                 class="input-field"
               >
               <button id="submit-clue-btn" class="btn btn-primary">Submit</button>
+            </div>
+          </div>
+
+          <div id="second-clue-prompt" class="workflow-step hidden">
+            <p>❌ First attempt failed! Give a 2-word clue to help:</p>
+            <div style="display: flex; gap: 10px;">
+              <input 
+                id="second-clue-input" 
+                type="text" 
+                placeholder="Two words"
+                maxlength="30"
+                class="input-field"
+              >
+              <button id="submit-second-clue-btn" class="btn btn-primary">Submit</button>
             </div>
           </div>
         </div>
@@ -102,7 +120,7 @@
         <!-- Guesses display -->
         <div id="guesses-display" class="guesses-display hidden"></div>
 
-        <!-- Next round button -->
+        <!-- Next round button (only show when all players done) -->
         <div id="next-round-section" class="hidden">
           <button id="next-round-btn" class="btn btn-primary">Next Round</button>
         </div>

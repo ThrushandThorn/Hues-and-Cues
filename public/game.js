@@ -4,7 +4,9 @@ let currentPlayer = {};
 let currentRoom = '';
 let gameState = null;
 let isClueGiver = false;
-let selectedCorrectColor = null; // Track selected color for clue giver
+let isHost = false;
+let selectedCorrectColor = null;
+let playerGuesses = {}; // Track which players have guessed and how many attempts
 
 // DOM Elements
 const screens = {
@@ -25,6 +27,7 @@ const buttons = {
   start: document.getElementById('start-btn'),
   leave: document.getElementById('leave-btn'),
   submitClue: document.getElementById('submit-clue-btn'),
+  submitSecondClue: document.getElementById('submit-second-clue-btn'),
   nextRound: document.getElementById('next-round-btn'),
   playAgain: document.getElementById('play-again-btn'),
   exit: document.getElementById('exit-btn')
@@ -36,8 +39,8 @@ function showScreen(screenName) {
   screens[screenName].classList.add('active');
 }
 
-function showError(message) {
-  const errorEl = document.getElementById('error-message');
+function showError(message, elementId = 'error-message') {
+  const errorEl = document.getElementById(elementId);
   errorEl.textContent = message;
   errorEl.classList.add('show');
   setTimeout(() => {
@@ -76,6 +79,13 @@ buttons.join.addEventListener('click', () => {
 
 // Lobby handlers
 buttons.start.addEventListener('click', () => {
+  const startError = document.getElementById('start-error');
+  if (!isHost) {
+    startError.textContent = 'Only the host can start the game';
+    startError.classList.add('show');
+    setTimeout(() => startError.classList.remove('show'), 5000);
+    return;
+  }
   socket.emit('start_game');
 });
 
@@ -83,7 +93,7 @@ buttons.leave.addEventListener('click', () => {
   window.location.reload();
 });
 
-// Game handlers - NEW WORKFLOW
+// Game handlers
 buttons.submitClue.addEventListener('click', () => {
   const clue = document.getElementById('clue-input').value.trim();
   
@@ -100,6 +110,19 @@ buttons.submitClue.addEventListener('click', () => {
   socket.emit('provide_clue', clue);
   document.getElementById('clue-input').value = '';
   document.getElementById('clue-input-section').classList.add('hidden');
+});
+
+buttons.submitSecondClue.addEventListener('click', () => {
+  const clue = document.getElementById('second-clue-input').value.trim();
+  
+  if (!clue) {
+    showError('Please enter a clue');
+    return;
+  }
+
+  socket.emit('provide_second_clue', clue);
+  document.getElementById('second-clue-input').value = '';
+  document.getElementById('second-clue-prompt').classList.add('hidden');
 });
 
 buttons.nextRound.addEventListener('click', () => {
@@ -125,7 +148,7 @@ socket.on('error', (message) => {
 });
 
 socket.on('player_joined', (data) => {
-  updateLobbyScreen(data.players, data.scores);
+  updateLobbyScreen(data.players, data.scores, data.hostId);
   showScreen('lobby');
 });
 
@@ -133,29 +156,36 @@ socket.on('round_started', (data) => {
   gameState = data;
   isClueGiver = data.clueGiver === socket.id;
   selectedCorrectColor = null;
+  playerGuesses = {};
   renderGameScreen(data);
 });
 
 socket.on('correct_color_picked', (data) => {
-  const statusEl = document.getElementById('status-message');
-  statusEl.textContent = `✓ ${data.message}`;
-  statusEl.classList.remove('hidden');
-  
   // Show clue input section
   document.getElementById('pick-color-prompt').classList.add('hidden');
   document.getElementById('clue-input-section').classList.remove('hidden');
+  document.getElementById('clue-instructions').textContent = 'Give a one-word clue for the color above:';
+  document.getElementById('clue-input').placeholder = 'One word';
 });
 
 socket.on('clue_provided', (data) => {
-  updateGameStatus(data.clue);
+  updateGameStatus(data.clue, data.isSecondClue);
+});
+
+socket.on('second_clue_provided', (data) => {
+  updateGameStatus(data.clue, true);
 });
 
 socket.on('guess_made', (data) => {
-  updateGuesses(data.guess, data.scores);
+  updateGuesses(data.guess, data.scores, data.canGiveSecondClue);
   
-  if (data.allGuessed) {
+  if (data.allGuessedOrFailed) {
     showNextRoundButton();
   }
+});
+
+socket.on('attempt_failed', (data) => {
+  showError(data.message);
 });
 
 socket.on('game_over', (data) => {
@@ -167,18 +197,27 @@ socket.on('player_left', (data) => {
     showError('All players left');
     window.location.reload();
   } else {
-    updateLobbyScreen(data.players, data.scores);
+    updateLobbyScreen(data.players, data.scores, data.hostId);
   }
 });
 
 // Render functions
-function updateLobbyScreen(players, scores) {
+function updateLobbyScreen(players, scores, hostId) {
+  isHost = hostId === socket.id;
+  
   const playersList = document.getElementById('players-list');
   playersList.innerHTML = players
-    .map(p => `<li>${p.name}</li>`)
+    .map(p => `<li>${p.name}${p.id === hostId ? ' 👑' : ''}</li>`)
     .join('');
 
   document.getElementById('room-code').textContent = `Room: ${currentRoom}`;
+
+  const hostBadge = document.getElementById('host-badge');
+  if (isHost) {
+    hostBadge.classList.remove('hidden');
+  } else {
+    hostBadge.classList.add('hidden');
+  }
 
   const canStart = players.length > 1;
   buttons.start.disabled = !canStart;
@@ -199,22 +238,24 @@ function renderGameScreen(data) {
   // Display role
   const roleDisplay = document.getElementById('role-display');
   const clueGiverSection = document.getElementById('clue-giver-section');
-  const statusMessage = document.getElementById('status-message');
 
   if (isClueGiver) {
     roleDisplay.textContent = '🎭 You are the CLUE GIVER';
     clueGiverSection.classList.remove('hidden');
     document.getElementById('pick-color-prompt').classList.remove('hidden');
     document.getElementById('clue-input-section').classList.add('hidden');
-    statusMessage.classList.add('hidden');
+    document.getElementById('second-clue-prompt').classList.add('hidden');
   } else {
     const clueGiverName = findPlayerName(data.clueGiver);
     roleDisplay.textContent = `👀 ${clueGiverName} is giving the clue...`;
     clueGiverSection.classList.add('hidden');
   }
 
-  // Render color grid (120 colors)
+  // Render color grid
   renderColors(data.colors);
+
+  // Clear previous guesses display
+  document.getElementById('guesses-display').innerHTML = '';
 
   showScreen('game');
 }
@@ -236,13 +277,9 @@ function renderColors(colors) {
 function handleColorClick(index) {
   if (isClueGiver) {
     // Clue giver: picking the correct color
-    // Clear previous selection
     document.querySelectorAll('.color-option').forEach(el => el.classList.remove('selected'));
-    
-    // Mark as selected
     document.querySelectorAll('.color-option')[index].classList.add('selected');
     
-    // Store selection and send to server
     selectedCorrectColor = index;
     socket.emit('pick_correct_color', index);
   } else {
@@ -254,30 +291,27 @@ function handleColorClick(index) {
   }
 }
 
-function updateGameStatus(clue) {
+function updateGameStatus(clue, isSecondClue) {
   const roleDisplay = document.getElementById('role-display');
-  roleDisplay.textContent = `💡 Clue: "${clue}"`;
+  roleDisplay.textContent = `💡 Clue: "${clue}"${isSecondClue ? ' (Attempt 2)' : ''}`;
   
   const clueGiverSection = document.getElementById('clue-giver-section');
   clueGiverSection.classList.add('hidden');
 }
 
-function updateGuesses(guess, scores) {
+function updateGuesses(guess, scores, canGiveSecondClue) {
   const guessesDisplay = document.getElementById('guesses-display');
   guessesDisplay.classList.remove('hidden');
 
+  const attemptText = guess.attempt === 2 ? ' (2nd attempt)' : '';
   const guessElement = `
     <div class="guess-item">
-      <span>${guess.playerName}</span>
+      <span>${guess.playerName}${attemptText}</span>
       <span class="${guess.correct ? 'guess-correct' : 'guess-incorrect'}">
         ${guess.correct ? '✓ Correct!' : '✗ Incorrect'}
       </span>
     </div>
   `;
-
-  if (guessesDisplay.innerHTML.includes(guess.playerName)) {
-    return;
-  }
 
   guessesDisplay.innerHTML += guessElement;
 
@@ -289,6 +323,14 @@ function updateGuesses(guess, scores) {
       return `<div class="score-item">${playerName}: ${score}</div>`;
     })
     .join('');
+
+  // If clue giver and someone failed first attempt, show second clue option
+  if (isClueGiver && canGiveSecondClue) {
+    document.getElementById('clue-giver-section').classList.remove('hidden');
+    document.getElementById('pick-color-prompt').classList.add('hidden');
+    document.getElementById('clue-input-section').classList.add('hidden');
+    document.getElementById('second-clue-prompt').classList.remove('hidden');
+  }
 }
 
 function showNextRoundButton() {
@@ -329,8 +371,13 @@ function findPlayerName(id) {
 // Keyboard shortcuts
 document.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
-    if (!document.getElementById('clue-input-section').classList.contains('hidden')) {
+    const clueSection = document.getElementById('clue-input-section');
+    const secondClueSection = document.getElementById('second-clue-prompt');
+    
+    if (!clueSection.classList.contains('hidden')) {
       buttons.submitClue.click();
+    } else if (!secondClueSection.classList.contains('hidden')) {
+      buttons.submitSecondClue.click();
     }
   }
 });
