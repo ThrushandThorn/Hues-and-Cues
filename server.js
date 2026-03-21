@@ -50,9 +50,10 @@ function createRoom(roomId) {
     clueGiven: false,
     guessing: false,
     guesses: {},                 // { playerId: {playerName, correct, points, attempt} }
-    playerAttempts: {},          // { playerId: attemptNumber }
-    occupiedIndices: new Set(),  // which color squares already taken by guesses
-    cueGiverPoints: 0,           // cap at 9 like real game[file:43]
+    playerAttempts: {},          // { playerId: attemptNumber (1 or 2) }
+    guessPositions: {},          // { playerId: [index1, index2] }
+    occupiedIndices: new Set(),  // color squares already taken
+    cueGiverPoints: 0,           // per-round tally for cue giver
     started: false
   };
 }
@@ -164,6 +165,9 @@ io.on('connection', (socket) => {
       // First clue: reset guesses & attempts for first-guess round
       room.guesses = {};
       room.playerAttempts = {};
+      room.guessPositions = {};
+      room.occupiedIndices = new Set();
+      room.cueGiverPoints = 0;
     }
 
     io.to(roomId).emit('clue_provided', {
@@ -200,7 +204,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Player makes a guess (max 2 attempts, each on a unused color)
+  // Player makes a guess (max 2 attempts, each on an unused color)
   socket.on('make_guess', (colorIndex) => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
@@ -218,7 +222,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Each color square can only be used once (like the board pieces)[file:43]
+    // Each color square can only be used once
     if (room.occupiedIndices.has(colorIndex)) {
       socket.emit('error', 'That color has already been chosen');
       return;
@@ -227,67 +231,46 @@ io.on('connection', (socket) => {
     room.playerAttempts[socket.id] += 1;
     const attemptNumber = room.playerAttempts[socket.id];
 
-    // Distance-based scoring like the scoring frame in the real game[file:43]
+    room.occupiedIndices.add(colorIndex);
+
+    // Store positions for end-of-round scoring
+    if (!room.guessPositions[socket.id]) {
+      room.guessPositions[socket.id] = [];
+    }
+    room.guessPositions[socket.id].push(colorIndex);
+
+    // For UI: mark exact vs not (points come later)
+    const targetIndex = room.correctColorIndex;
     const guessRow = Math.floor(colorIndex / COLS);
     const guessCol = colorIndex % COLS;
-    const targetRow = Math.floor(room.correctColorIndex / COLS);
-    const targetCol = room.correctColorIndex % COLS;
-
+    const targetRow = Math.floor(targetIndex / COLS);
+    const targetCol = targetIndex % COLS;
     const dx = Math.abs(guessRow - targetRow);
     const dy = Math.abs(guessCol - targetCol);
-    const chebyshev = Math.max(dx, dy); // distance in board squares
-
-    let guessPoints = 0;
-    if (chebyshev === 0) {
-      guessPoints = 3; // exact color[file:43]
-    } else if (chebyshev === 1) {
-      guessPoints = 2; // within 3×3 frame[file:43]
-    } else if (chebyshev === 2) {
-      guessPoints = 1; // adjacent to frame[file:43]
-    }
-
-    room.scores[socket.id] = (room.scores[socket.id] || 0) + guessPoints;
-
-    // Cue giver gets 1 point for each guess within frame (chebyshev <= 1), max 9[file:43]
-    if (chebyshev <= 1) {
-      const giverId = room.currentPlayer;
-      const remaining = 9 - room.cueGiverPoints;
-      if (remaining > 0) {
-        const awarded = 1; // each piece is 1 point to clue giver[file:43]
-        const actualAwarded = Math.min(awarded, remaining);
-        room.cueGiverPoints += actualAwarded;
-        room.scores[giverId] = (room.scores[giverId] || 0) + actualAwarded;
-      }
-    }
-
-    room.occupiedIndices.add(colorIndex);
+    const chebyshev = Math.max(dx, dy);
+    const isExact = chebyshev === 0;
 
     room.guesses[socket.id] = {
       playerName: room.players.find(p => p.id === socket.id).name,
-      correct: chebyshev === 0,
-      points: guessPoints,
+      correct: isExact,
+      points: 0,  // actual points assigned at end of round
       attempt: attemptNumber
     };
 
-    // Have all non-clue-givers finished (either correct or 2 attempts)?
     const nonClueGivers = room.players.filter(p => p.id !== room.currentPlayer);
     const allGuessedOrDone = nonClueGivers.every(p => {
-      const g = room.guesses[p.id];
       const attempts = room.playerAttempts[p.id] || 0;
-      return g && (g.correct || attempts >= 2);
+      return attempts >= 2 || (room.guessPositions[p.id] && room.guessPositions[p.id].length > 0);
     });
 
     io.to(roomId).emit('guess_made', {
       guess: room.guesses[socket.id],
       scores: room.scores,
       allGuessedOrFailed: allGuessedOrDone,
-      canGiveSecondClue:
-        !room.guesses[socket.id].correct &&
-        attemptNumber === 1 &&
-        room.clueWordCount === 1
+      canGiveSecondClue: !isExact && attemptNumber === 1 && room.clueWordCount === 1
     });
 
-    if (!room.guesses[socket.id].correct && attemptNumber === 1) {
+    if (!isExact && attemptNumber === 1) {
       socket.emit('attempt_failed', {
         message: 'First attempt recorded. You will get one more guess after the second clue.',
         roundsRemaining: 1
@@ -295,7 +278,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Next round (only when all players done)
+  // Next round (only when all players have at least one guess),
+  // and scoring happens here once per round like the board frame.[file:43]
   socket.on('next_round', () => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
@@ -304,15 +288,21 @@ io.on('connection', (socket) => {
 
     const nonClueGivers = room.players.filter(p => p.id !== room.currentPlayer);
     const allComplete = nonClueGivers.every(p => {
-      const g = room.guesses[p.id];
       const attempts = room.playerAttempts[p.id] || 0;
-      return g && (g.correct || attempts >= 2);
+      return attempts >= 1;
     });
 
     if (!allComplete) {
       socket.emit('error', 'Not all players have finished their guesses');
       return;
     }
+
+    const roundPoints = scoreRound(room);
+
+    io.to(roomId).emit('round_scored', {
+      roundPoints,
+      scores: room.scores
+    });
 
     room.round++;
 
@@ -366,6 +356,7 @@ function startRound(roomId) {
   room.correctColorIndex = null;
   room.guesses = {};
   room.playerAttempts = {};
+  room.guessPositions = {};
   room.occupiedIndices = new Set();
   room.cueGiverPoints = 0;
 
@@ -382,6 +373,67 @@ function startRound(roomId) {
     clueGiver: room.currentPlayer,
     scores: room.scores
   });
+}
+
+// End-of-round scoring: apply 3/2/1 frame rules, 5-point cap per guesser,
+// 9-point cap for cue giver, as in the official rules.[file:43]
+function scoreRound(room) {
+  const targetIndex = room.correctColorIndex;
+  const targetRow = Math.floor(targetIndex / COLS);
+  const targetCol = targetIndex % COLS;
+
+  const roundPoints = {}; // per player this round
+  let cueGiverRound = 0;
+  const giverId = room.currentPlayer;
+
+  room.players.forEach(player => {
+    if (player.id === giverId) return;
+
+    const guesses = room.guessPositions[player.id] || [];
+    let playerRound = 0;
+
+    for (const index of guesses) {
+      const row = Math.floor(index / COLS);
+      const col = index % COLS;
+      const dx = Math.abs(row - targetRow);
+      const dy = Math.abs(col - targetCol);
+      const chebyshev = Math.max(dx, dy);
+
+      let piecePoints = 0;
+      if (chebyshev === 0) piecePoints = 3;       // exact
+      else if (chebyshev === 1) piecePoints = 2;  // within frame
+      else if (chebyshev === 2) piecePoints = 1;  // adjacent ring
+
+      // cap each guesser at 5 points per round[file:43]
+      const remainingForPlayer = 5 - playerRound;
+      if (remainingForPlayer <= 0) continue;
+      const applied = Math.min(piecePoints, remainingForPlayer);
+      playerRound += applied;
+
+      // cue giver: 1 point per piece in frame (chebyshev <= 1), max 9[file:43]
+      if (chebyshev <= 1) {
+        const remainingForGiver = 9 - cueGiverRound;
+        if (remainingForGiver > 0) {
+          cueGiverRound += 1;
+        }
+      }
+    }
+
+    if (playerRound > 0) {
+      roundPoints[player.id] = playerRound;
+    }
+  });
+
+  if (cueGiverRound > 0) {
+    roundPoints[giverId] = (roundPoints[giverId] || 0) + cueGiverRound;
+  }
+
+  // Apply to total scores
+  Object.entries(roundPoints).forEach(([id, pts]) => {
+    room.scores[id] = (room.scores[id] || 0) + pts;
+  });
+
+  return roundPoints;
 }
 
 server.listen(PORT, () => {
