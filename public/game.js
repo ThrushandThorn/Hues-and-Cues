@@ -146,8 +146,7 @@ socket.on('round_started', (data) => {
   isClueGiver = data.clueGiver === socket.id;
   selectedCorrectColor = null;
 
-  const nextSection = document.getElementById('next-round-section');
-  nextSection.classList.add('hidden');
+  document.getElementById('next-round-section').classList.add('hidden');
 
   renderGameScreen(data);
 });
@@ -177,6 +176,17 @@ socket.on('guess_made', (data) => {
 
 socket.on('attempt_failed', (data) => {
   showError(data.message);
+});
+
+// Final scoring at end of round (matches official rules: 3/2/1, max 5 per guesser, 9 for cue giver)[file:43]
+socket.on('round_scored', (data) => {
+  const scoresDisplay = document.getElementById('scores-display');
+  scoresDisplay.innerHTML = Object.entries(data.scores)
+    .map(([id, score]) => {
+      const name = findPlayerName(id);
+      return `<div class="score-item">${name}: ${score}</div>`;
+    })
+    .join('');
 });
 
 socket.on('game_over', (data) => {
@@ -216,10 +226,9 @@ function updateLobbyScreen(players, scores, hostId) {
   const canStart = players.length > 1;
   buttons.start.disabled = !canStart;
 
-  // Update scores in lobby if needed
   const scoresDisplay = document.getElementById('scores-display');
-  if (scoresDisplay) {
-    scoresDisplay.innerHTML = Object.entries(scores || {})
+  if (scoresDisplay && scores) {
+    scoresDisplay.innerHTML = Object.entries(scores)
       .map(([id, score]) => {
         const name = findPlayerName(id);
         return `<div class="score-item">${name}: ${score}</div>`;
@@ -277,6 +286,7 @@ function renderColors(colors) {
     .join('');
 }
 
+// Called from inline onclick
 function handleColorClick(index) {
   if (isClueGiver) {
     document.querySelectorAll('.color-option').forEach(el =>
@@ -304,13 +314,12 @@ function updateGuesses(guess, scores, canGiveSecondClue) {
   guessesDisplay.classList.remove('hidden');
 
   const attemptText = guess.attempt === 2 ? ' (2nd guess)' : ' (1st guess)';
-  const pointsText = `+${guess.points} pt${guess.points === 1 ? '' : 's'}`;
 
   const guessElement = `
     <div class="guess-item">
       <span>${guess.playerName}${attemptText}</span>
       <span class="${guess.correct ? 'guess-correct' : 'guess-incorrect'}">
-        ${guess.correct ? '✓ Correct' : '✗'} — ${pointsText}
+        ${guess.correct ? '✓ Exact color' : 'Guess placed'}
       </span>
     </div>
   `;
