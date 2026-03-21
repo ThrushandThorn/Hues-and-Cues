@@ -7,6 +7,7 @@ let isClueGiver = false;
 let isHost = false;
 let selectedCorrectColor = null;
 let playerNames = {}; // id -> name
+let canGuess = false; // block guesses before clues
 
 // DOM Elements
 const screens = {
@@ -145,8 +146,14 @@ socket.on('round_started', (data) => {
   gameState = data;
   isClueGiver = data.clueGiver === socket.id;
   selectedCorrectColor = null;
+  canGuess = false;
 
   document.getElementById('next-round-section').classList.add('hidden');
+
+  // clear any previous correct-color highlight
+  document
+    .querySelectorAll('.color-option.correct-color')
+    .forEach(el => el.classList.remove('correct-color'));
 
   renderGameScreen(data);
 });
@@ -160,15 +167,17 @@ socket.on('correct_color_picked', () => {
 });
 
 socket.on('clue_provided', (data) => {
+  canGuess = true;
   updateGameStatus(data.clue, data.isSecondClue);
 });
 
 socket.on('second_clue_provided', (data) => {
+  canGuess = true;
   updateGameStatus(data.clue, true);
 });
 
 socket.on('guess_made', (data) => {
-  updateGuesses(data.guess, data.scores, data.canGiveSecondClue);
+  updateGuesses(data.guess, data.scores, data.canGiveSecondClue, data.colorIndex);
   if (data.allGuessedOrFailed) {
     showNextRoundButton();
   }
@@ -178,7 +187,7 @@ socket.on('attempt_failed', (data) => {
   showError(data.message);
 });
 
-// Final scoring at end of round (matches official rules: 3/2/1, max 5 per guesser, 9 for cue giver)[file:43]
+// Final scoring at end of round
 socket.on('round_scored', (data) => {
   const scoresDisplay = document.getElementById('scores-display');
   scoresDisplay.innerHTML = Object.entries(data.scores)
@@ -187,6 +196,13 @@ socket.on('round_scored', (data) => {
       return `<div class="score-item">${name}: ${score}</div>`;
     })
     .join('');
+
+  // Highlight correct color for everyone
+  const idx = data.correctColorIndex;
+  const options = document.querySelectorAll('.color-option');
+  if (options[idx]) {
+    options[idx].classList.add('correct-color');
+  }
 });
 
 socket.on('game_over', (data) => {
@@ -288,16 +304,24 @@ function renderColors(colors) {
 
 // Called from inline onclick
 function handleColorClick(index) {
+  const options = document.querySelectorAll('.color-option');
+
   if (isClueGiver) {
-    document.querySelectorAll('.color-option').forEach(el =>
-      el.classList.remove('selected')
-    );
-    document.querySelectorAll('.color-option')[index].classList.add('selected');
+    options.forEach(el => el.classList.remove('selected'));
+    options[index].classList.add('selected');
     selectedCorrectColor = index;
     socket.emit('pick_correct_color', index);
   } else {
+    if (!canGuess) {
+      showError('Wait for the clue before guessing');
+      return;
+    }
+    if (options[index].classList.contains('taken')) {
+      showError('That color is already taken');
+      return;
+    }
     socket.emit('make_guess', index);
-    document.querySelectorAll('.color-option')[index].classList.add('selected');
+    options[index].classList.add('selected');
   }
 }
 
@@ -309,7 +333,7 @@ function updateGameStatus(clue, isSecondClue) {
   clueGiverSection.classList.add('hidden');
 }
 
-function updateGuesses(guess, scores, canGiveSecondClue) {
+function updateGuesses(guess, scores, canGiveSecondClue, colorIndex) {
   const guessesDisplay = document.getElementById('guesses-display');
   guessesDisplay.classList.remove('hidden');
 
@@ -324,6 +348,13 @@ function updateGuesses(guess, scores, canGiveSecondClue) {
     </div>
   `;
   guessesDisplay.innerHTML += guessElement;
+
+  // Mark this square as taken for everyone
+  const options = document.querySelectorAll('.color-option');
+  if (options[colorIndex]) {
+    options[colorIndex].classList.add('taken');
+    options[colorIndex].style.pointerEvents = 'none';
+  }
 
   const scoresDisplay = document.getElementById('scores-display');
   scoresDisplay.innerHTML = Object.entries(scores)
