@@ -112,8 +112,12 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // New game: reset scores and round
+    room.scores = {};
+    room.players.forEach(p => { room.scores[p.id] = 0; });
     room.started = true;
     room.round = 1;
+
     startRound(roomId);
   });
 
@@ -210,7 +214,7 @@ io.on('connection', (socket) => {
     if (!roomId) return;
 
     const room = rooms.get(roomId);
-    if (!room.guessing) return;
+    if (!room.guessing || !room.clueGiven) return; // no guessing before clue
     if (socket.id === room.currentPlayer) return;
 
     // Limit to 2 attempts
@@ -267,7 +271,8 @@ io.on('connection', (socket) => {
       guess: room.guesses[socket.id],
       scores: room.scores,
       allGuessedOrFailed: allGuessedOrDone,
-      canGiveSecondClue: !isExact && attemptNumber === 1 && room.clueWordCount === 1
+      canGiveSecondClue: !isExact && attemptNumber === 1 && room.clueWordCount === 1,
+      colorIndex // for marking taken squares client-side
     });
 
     if (!isExact && attemptNumber === 1) {
@@ -278,18 +283,24 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Next round (only when all players have at least one guess),
-  // and scoring happens here once per round like the board frame.[file:43]
+  // Next round (only host; everyone must have finished their guesses)
   socket.on('next_round', () => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
 
     const room = rooms.get(roomId);
 
+    // Only host can advance rounds
+    if (room.hostId !== socket.id) {
+      socket.emit('error', 'Only the host can advance to the next round');
+      return;
+    }
+
     const nonClueGivers = room.players.filter(p => p.id !== room.currentPlayer);
+    // Require 2 attempts per player (since we always allow second clue for now)
     const allComplete = nonClueGivers.every(p => {
       const attempts = room.playerAttempts[p.id] || 0;
-      return attempts >= 1;
+      return attempts >= 2;
     });
 
     if (!allComplete) {
@@ -301,7 +312,8 @@ io.on('connection', (socket) => {
 
     io.to(roomId).emit('round_scored', {
       roundPoints,
-      scores: room.scores
+      scores: room.scores,
+      correctColorIndex: room.correctColorIndex
     });
 
     room.round++;
