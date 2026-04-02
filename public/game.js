@@ -150,10 +150,16 @@ socket.on('round_started', (data) => {
 
   document.getElementById('next-round-section').classList.add('hidden');
 
-  // clear any previous correct-color highlight
+  // clear any previous correct-color highlight and taken flags
   document
     .querySelectorAll('.color-option.correct-color')
     .forEach(el => el.classList.remove('correct-color'));
+  document
+    .querySelectorAll('.color-option.taken')
+    .forEach(el => {
+      el.classList.remove('taken');
+      el.style.pointerEvents = '';
+    });
 
   renderGameScreen(data);
 });
@@ -187,6 +193,15 @@ socket.on('attempt_failed', (data) => {
   showError(data.message);
 });
 
+// Everyone has made second guesses – show correct color
+socket.on('all_guesses_complete', (data) => {
+  const idx = data.correctColorIndex;
+  const options = document.querySelectorAll('.color-option');
+  if (options[idx]) {
+    options[idx].classList.add('correct-color');
+  }
+});
+
 // Final scoring at end of round
 socket.on('round_scored', (data) => {
   const scoresDisplay = document.getElementById('scores-display');
@@ -196,13 +211,6 @@ socket.on('round_scored', (data) => {
       return `<div class="score-item">${name}: ${score}</div>`;
     })
     .join('');
-
-  // Highlight correct color for everyone
-  const idx = data.correctColorIndex;
-  const options = document.querySelectorAll('.color-option');
-  if (options[idx]) {
-    options[idx].classList.add('correct-color');
-  }
 });
 
 socket.on('game_over', (data) => {
@@ -374,7 +382,10 @@ function updateGuesses(guess, scores, canGiveSecondClue, colorIndex) {
 }
 
 function showNextRoundButton() {
-  document.getElementById('next-round-section').classList.remove('hidden');
+  // Only host sees the Next Round button
+  if (isHost) {
+    document.getElementById('next-round-section').classList.remove('hidden');
+  }
 }
 
 function renderGameOverScreen(scores, winnerName) {
