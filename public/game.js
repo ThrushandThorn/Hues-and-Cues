@@ -238,7 +238,7 @@ function updateLobbyScreen(players, scores, hostId) {
 
   const playersList = document.getElementById('players-list');
   playersList.innerHTML = players
-    .map(p => `<li>${p.name}${p.id === hostId ? ' 👑' : ''}</li>`)
+    .map(p => `>${p.name}${p.id === hostId ? ' 👑' : ''}</li>`)
     .join('');
 
   document.getElementById('room-code').textContent = `Room: ${currentRoom}`;
