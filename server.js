@@ -208,7 +208,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Player makes a guess (max 2 attempts, each on an unused color)
+  // Player makes a guess
   socket.on('make_guess', (colorIndex) => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
@@ -217,12 +217,14 @@ io.on('connection', (socket) => {
     if (!room.guessing || !room.clueGiven) return; // no guessing before clue
     if (socket.id === room.currentPlayer) return;
 
-    // Limit to 2 attempts
+    // Allowed attempts depend on clue stage:
+    // 1 attempt after 1-word clue, 2 after 2-word clue
+    const allowedAttempts = room.clueWordCount;
     if (!room.playerAttempts[socket.id]) {
       room.playerAttempts[socket.id] = 0;
     }
-    if (room.playerAttempts[socket.id] >= 2) {
-      socket.emit('error', 'You have already used both of your guesses this round');
+    if (room.playerAttempts[socket.id] >= allowedAttempts) {
+      socket.emit('error', 'You cannot guess again yet');
       return;
     }
 
@@ -262,28 +264,39 @@ io.on('connection', (socket) => {
     };
 
     const nonClueGivers = room.players.filter(p => p.id !== room.currentPlayer);
-    const allGuessedOrDone = nonClueGivers.every(p => {
+    // All done when every non-clue-giver has attempts == 2
+    const allSecondGuessesDone = nonClueGivers.every(p => {
       const attempts = room.playerAttempts[p.id] || 0;
-      return attempts >= 2 || (room.guessPositions[p.id] && room.guessPositions[p.id].length > 0);
+      return attempts >= 2;
     });
 
     io.to(roomId).emit('guess_made', {
       guess: room.guesses[socket.id],
       scores: room.scores,
-      allGuessedOrFailed: allGuessedOrDone,
-      canGiveSecondClue: !isExact && attemptNumber === 1 && room.clueWordCount === 1,
+      allGuessedOrFailed: allSecondGuessesDone,
+      canGiveSecondClue:
+        !isExact &&
+        attemptNumber === 1 &&
+        room.clueWordCount === 1,
       colorIndex // for marking taken squares client-side
     });
 
-    if (!isExact && attemptNumber === 1) {
+    if (!isExact && attemptNumber === 1 && room.clueWordCount === 1) {
       socket.emit('attempt_failed', {
         message: 'First attempt recorded. You will get one more guess after the second clue.',
         roundsRemaining: 1
       });
     }
+
+    // When everyone has made 2nd guesses, reveal correct color immediately
+    if (allSecondGuessesDone) {
+      io.to(roomId).emit('all_guesses_complete', {
+        correctColorIndex: room.correctColorIndex
+      });
+    }
   });
 
-  // Next round (only host; everyone must have finished their guesses)
+  // Next round (only host; everyone must have 2 guesses)
   socket.on('next_round', () => {
     const roomId = playerRooms.get(socket.id);
     if (!roomId) return;
@@ -297,7 +310,6 @@ io.on('connection', (socket) => {
     }
 
     const nonClueGivers = room.players.filter(p => p.id !== room.currentPlayer);
-    // Require 2 attempts per player (since we always allow second clue for now)
     const allComplete = nonClueGivers.every(p => {
       const attempts = room.playerAttempts[p.id] || 0;
       return attempts >= 2;
@@ -312,8 +324,8 @@ io.on('connection', (socket) => {
 
     io.to(roomId).emit('round_scored', {
       roundPoints,
-      scores: room.scores,
-      correctColorIndex: room.correctColorIndex
+      scores: room.scores
+      // correctColorIndex already revealed by all_guesses_complete
     });
 
     room.round++;
@@ -340,114 +352,4 @@ io.on('connection', (socket) => {
       delete room.scores[socket.id];
 
       // If host leaves, next player becomes host
-      if (room.hostId === socket.id && room.players.length > 0) {
-        room.hostId = room.players[0].id;
-      }
-
-      if (room.players.length === 0) {
-        rooms.delete(roomId);
-      } else {
-        io.to(roomId).emit('player_left', {
-          players: room.players.map(p => ({ id: p.id, name: p.name })),
-          scores: room.scores,
-          hostId: room.hostId
-        });
-      }
-    }
-    playerRooms.delete(socket.id);
-    console.log(`Player ${socket.id} disconnected`);
-  });
-});
-
-function startRound(roomId) {
-  const room = rooms.get(roomId);
-  room.guessing = false;
-  room.clue = '';
-  room.clueWordCount = 1; // back to 1-word clue
-  room.clueGiven = false;
-  room.correctColorIndex = null;
-  room.guesses = {};
-  room.playerAttempts = {};
-  room.guessPositions = {};
-  room.occupiedIndices = new Set();
-  room.cueGiverPoints = 0;
-
-  // Rotate clue giver
-  const currentIndex = room.players.findIndex(p => p.id === room.currentPlayer);
-  const nextIndex = currentIndex === -1
-    ? 0
-    : (currentIndex + 1) % room.players.length;
-  room.currentPlayer = room.players[nextIndex].id;
-
-  io.to(roomId).emit('round_started', {
-    round: room.round,
-    colors: room.colors,
-    clueGiver: room.currentPlayer,
-    scores: room.scores
-  });
-}
-
-// End-of-round scoring: apply 3/2/1 frame rules, 5-point cap per guesser,
-// 9-point cap for cue giver, as in the official rules.[file:43]
-function scoreRound(room) {
-  const targetIndex = room.correctColorIndex;
-  const targetRow = Math.floor(targetIndex / COLS);
-  const targetCol = targetIndex % COLS;
-
-  const roundPoints = {}; // per player this round
-  let cueGiverRound = 0;
-  const giverId = room.currentPlayer;
-
-  room.players.forEach(player => {
-    if (player.id === giverId) return;
-
-    const guesses = room.guessPositions[player.id] || [];
-    let playerRound = 0;
-
-    for (const index of guesses) {
-      const row = Math.floor(index / COLS);
-      const col = index % COLS;
-      const dx = Math.abs(row - targetRow);
-      const dy = Math.abs(col - targetCol);
-      const chebyshev = Math.max(dx, dy);
-
-      let piecePoints = 0;
-      if (chebyshev === 0) piecePoints = 3;       // exact
-      else if (chebyshev === 1) piecePoints = 2;  // within frame
-      else if (chebyshev === 2) piecePoints = 1;  // adjacent ring
-
-      // cap each guesser at 5 points per round[file:43]
-      const remainingForPlayer = 5 - playerRound;
-      if (remainingForPlayer <= 0) continue;
-      const applied = Math.min(piecePoints, remainingForPlayer);
-      playerRound += applied;
-
-      // cue giver: 1 point per piece in frame (chebyshev <= 1), max 9[file:43]
-      if (chebyshev <= 1) {
-        const remainingForGiver = 9 - cueGiverRound;
-        if (remainingForGiver > 0) {
-          cueGiverRound += 1;
-        }
-      }
-    }
-
-    if (playerRound > 0) {
-      roundPoints[player.id] = playerRound;
-    }
-  });
-
-  if (cueGiverRound > 0) {
-    roundPoints[giverId] = (roundPoints[giverId] || 0) + cueGiverRound;
-  }
-
-  // Apply to total scores
-  Object.entries(roundPoints).forEach(([id, pts]) => {
-    room.scores[id] = (room.scores[id] || 0) + pts;
-  });
-
-  return roundPoints;
-}
-
-server.listen(PORT, () => {
-  console.log(`Hues and Cues server running on port ${PORT}`);
-});
+      if 
