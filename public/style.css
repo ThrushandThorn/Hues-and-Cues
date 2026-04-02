@@ -248,10 +248,9 @@ p {
 /* Colors grid - 200 SMALL SQUARES */
 .colors-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(20, minmax(35px, 1fr)); /* 20 columns */
+  gap: 4px;
   margin: 30px 0;
-  min-height: 300px;
   padding: 10px;
   background: #f9f9f9;
   border-radius: 8px;
